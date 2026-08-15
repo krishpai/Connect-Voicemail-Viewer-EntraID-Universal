@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { apiRequest } from "../authConfig";
 import { DateRangeSelector } from "./DateRangeSelector";
 import { VMCategory } from "./VMCategory";
 import { Box, Stack, Typography, Button, FormControl, RadioGroup, FormControlLabel, Radio } from "@mui/material";
+import { BrowserAuthError } from "@azure/msal-browser";
 import { useAcquireTokenWithRecovery } from "../hooks/useAcquireTokenWithRecovery";
 
 const API_ENDPOINT_ENTRA_AUTH = import.meta.env.VITE_API_URL_ENTRA_AUTH;
@@ -23,54 +24,90 @@ export const SearchBox: React.FC<SearchBoxProps> = ({ userName, region, tier, en
   const [endDate, setEndDate] = useState<string>("");
   const [searchFailedNoMessages, setSearchFailedNoMessages] = useState<boolean>(false);
   const [searchFailedServerOverloaded, setSearchFailedServerOverloaded] = useState<boolean>(false);
+  const [authFailed, setAuthFailed] = useState<string | null>(null);
   const [queryType, setQueryType] = useState<string>("New");
   const [loading, setLoading] = useState<boolean>(false);
 
   const acquireTokenWithRecovery = useAcquireTokenWithRecovery();
 
+  /**
+   * Turns an MSAL failure into a message the agent can act on.
+   */
+  const describeAuthError = useCallback((error: unknown): string => {
+    if (error instanceof BrowserAuthError) {
+      if (error.errorCode === "popup_window_error" || error.errorCode === "empty_window_error") {
+        return "The browser blocked the sign in window. Allow pop-ups for this site, then try again.";
+      }
+      if (error.errorCode === "user_cancelled") {
+        return "Sign in was cancelled.";
+      }
+      if (error.errorCode === "block_nested_popups") {
+        return "Sign in could not start. Reload the app and try again.";
+      }
+    }
+    return "Sign in did not complete. Try again.";
+  }, []);
+
   const searchClicked = async () => {
     setLoading(true);
     setSearchFailedNoMessages(false);
     setSearchFailedServerOverloaded(false);
+    setAuthFailed(null);
 
+    const endpoint = entraAuth ? API_ENDPOINT_ENTRA_AUTH : API_ENDPOINT_CONNECT_AUTH;
+    const apiUrl = `${endpoint}?function_code=fetch_voice_messages&userName=${encodeURIComponent(userName)}&vmx3_region=${vmCategory}&user_tier=${tier}&start_date=${startDate}&end_date=${endDate}&query_type=${queryType}`;
 
-    let apiUrl;
+    console.log("apiUrl: " + apiUrl);
 
-    if (entraAuth)
-      apiUrl = `${API_ENDPOINT_ENTRA_AUTH}?function_code=fetch_voice_messages&userName=${userName}&vmx3_region=${vmCategory}&user_tier=${tier}&start_date=${startDate}&end_date=${endDate}&query_type=${queryType}`;
-    else
-      apiUrl = `${API_ENDPOINT_CONNECT_AUTH}?function_code=fetch_voice_messages&userName=${userName}&vmx3_region=${vmCategory}&user_tier=${tier}&start_date=${startDate}&end_date=${endDate}&query_type=${queryType}`;
-
-    console.log("apiUrl: " + apiUrl)
-    let accessToken: string = "none";
+    let accessToken: string;
 
     try {
-      if (entraAuth) {
-        const authResult = await acquireTokenWithRecovery({
-          ...apiRequest
-        });
-        accessToken = authResult?.accessToken ?? "none";
+      // Interaction is allowed here: this runs inside the click handler, so a
+      // popup still has the user gesture it needs. The hook picks popup or
+      // redirect based on whether we are embedded in Agent Workspace.
+      const authResult = await acquireTokenWithRecovery({ ...apiRequest }, { allowInteraction: true });
+      accessToken = authResult?.accessToken ?? "";
+    } catch (error) {
+      console.error("Token acquisition failed:", error);
+      setAuthFailed(describeAuthError(error));
+      onSearchResultChange("");
+      setLoading(false);
+      return;
+    }
+
+    if (!accessToken) {
+      // In the standalone tab the hook may have started a redirect, in which
+      // case the page is already navigating away.
+      setAuthFailed("Sign in did not complete. Try again.");
+      onSearchResultChange("");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(apiUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        setAuthFailed("Your session expired. Select Retrieve Messages to sign in again.");
+        onSearchResultChange("");
+        return;
       }
 
-      if (accessToken) {
-        const response = await fetch(apiUrl, {
-          headers: { Authorization: `Bearer ${accessToken}` }
-        });
+      if (!response.ok) {
+        setSearchFailedServerOverloaded(true);
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+      }
 
-        if (!response.ok) {
-          setSearchFailedServerOverloaded(true);
-          throw new Error(`API error: ${response.status} ${response.statusText}`);
-        }
+      const data = await response.json();
 
-        const data = await response.json();
-
-        if (data.success && data.matched_objects_count > 0) {
-          onSearchResultChange(JSON.stringify(data));
-        }
-        else {
-          setSearchFailedNoMessages(true);
-          onSearchResultChange("");
-        }
+      if (data.success && data.matched_objects_count > 0) {
+        onSearchResultChange(JSON.stringify(data));
+      }
+      else {
+        setSearchFailedNoMessages(true);
+        onSearchResultChange("");
       }
     }
     catch (e) {
@@ -154,6 +191,12 @@ export const SearchBox: React.FC<SearchBoxProps> = ({ userName, region, tier, en
         {loading && (
           <Typography sx={{ mt: 2, color: "text.secondary", fontStyle: "italic" }}>
             Please wait, communicating with server...
+          </Typography>
+        )}
+
+        {!loading && authFailed && (
+          <Typography color="error" sx={{ mt: 2, fontWeight: 500 }}>
+            {authFailed}
           </Typography>
         )}
 

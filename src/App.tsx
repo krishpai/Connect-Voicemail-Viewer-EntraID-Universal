@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { MsalAuthenticationTemplate } from "@azure/msal-react";
+import { MsalAuthenticationTemplate, useMsal } from "@azure/msal-react";
 import { AmazonConnectApp } from '@amazon-connect/app';
 import { AgentClient } from "@amazon-connect/contact";
 import { VoiceClient, type CreateOutboundCallResult } from "@amazon-connect/voice";
@@ -8,8 +8,10 @@ import { PageLayout } from "./components/PageLayout";
 import { SearchBox } from "./components/SearchBox";
 import { SearchResultsView } from "./components/SearchResultsView";
 import Divider from '@mui/material/Divider';
-import { InteractionType } from "@azure/msal-browser";
-import { useMsal } from "@azure/msal-react";
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Typography from '@mui/material/Typography';
+import { InteractionType, BrowserAuthError } from "@azure/msal-browser";
 import { apiRequest } from "./authConfig";
 import { useAcquireTokenWithRecovery } from "./hooks/useAcquireTokenWithRecovery";
 
@@ -24,6 +26,23 @@ const isIframe = window.self !== window.top; // Immediate check
 const isMsalInternalFrame = window.location.hash.includes("code=") ||
   window.location.hash.includes("error=") ||
   window.name.includes("msal");
+
+/**
+ * True when this document is the popup window MSAL itself opened. MSAL names
+ * those windows "msal.<id>" and they always have an opener. The app must not
+ * boot its normal logic there - the popup exists only so MSAL can read the
+ * auth response, and it closes itself moments later.
+ */
+const isMsalPopup =
+  !!window.opener && window.opener !== window && window.name.startsWith("msal.");
+
+/**
+ * Auth states for the embedded (Agent Workspace) path.
+ * - checking:        a silent token attempt or popup is in flight
+ * - authenticated:   we hold a usable access token for the backend API
+ * - signin-required: the agent must click Sign in (popup needs a user gesture)
+ */
+type EmbeddedAuthStatus = "checking" | "authenticated" | "signin-required";
 
 function App() {
   const { instance, accounts } = useMsal();
@@ -44,13 +63,53 @@ function App() {
 
   const [searchResult, setSearchResult] = useState("");
   const [loading, setLoading] = useState<boolean>(false);
-  const [, setConnectUserId] = useState<string | null>(null);
+  const [connectUserId, setConnectUserId] = useState<string | null>(null);
   const [, setContactId] = useState<string | null>(null);
+
+  // Embedded (iframe) MSAL state
+  const [embeddedAuthStatus, setEmbeddedAuthStatus] =
+    useState<EmbeddedAuthStatus>("checking");
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Refs to prevent double-init or stale closures
   const sdkStarted = useRef(false);
+  const silentAuthAttempted = useRef(false);
 
   const acquireTokenWithRecovery = useAcquireTokenWithRecovery();
+
+  /**
+   * Interactive sign in for the embedded app. Wired to a button so the popup
+   * is opened while the user gesture is still active.
+   */
+  const signInWithPopup = useCallback(async () => {
+    setAuthError(null);
+    setEmbeddedAuthStatus("checking");
+
+    try {
+      const result = await acquireTokenWithRecovery({ ...apiRequest }, { allowInteraction: true });
+      if (!result?.accessToken) throw new Error("No access token returned.");
+      setEmbeddedAuthStatus("authenticated");
+    } catch (error) {
+      console.error("Popup sign in failed:", error);
+      setEmbeddedAuthStatus("signin-required");
+
+      if (error instanceof BrowserAuthError) {
+        if (error.errorCode === "popup_window_error" || error.errorCode === "empty_window_error") {
+          setAuthError("The browser blocked the sign in window. Allow pop-ups for this site and try again.");
+          return;
+        }
+        if (error.errorCode === "user_cancelled") {
+          setAuthError("Sign in was cancelled.");
+          return;
+        }
+        if (error.errorCode === "block_nested_popups") {
+          setAuthError("Sign in could not start. Reload the app and try again.");
+          return;
+        }
+      }
+      setAuthError("Sign in did not complete. Try again.");
+    }
+  }, [acquireTokenWithRecovery]);
 
   /**
    * Fetches the user region from the backend API for standalone app.
@@ -106,20 +165,36 @@ function App() {
   }, [acquireTokenWithRecovery]);
 
   /**
-   * Fetches the user region from the backend API for iframe embedded app.
+   * Fetches the user info from the backend API for the iframe embedded app.
+   * Sends the MSAL access token as a bearer token. Silent only - this runs on
+   * mount, with no user gesture to open a popup with.
+   * Region comes from the routing profile, so it is not overwritten here.
    */
   const getUserInfo_Connect = useCallback(async (connectUserId: string | null) => {
-    console.log("*********** in getUserRegion_Connect");
-    //connectUserId = "79e4e9fe-40f7-44d1-969e-d82113792b2f";
+    console.log("*********** in getUserInfo_Connect");
     const apiUrl = `${API_ENDPOINT_CONNECT_AUTH}?function_code=get_user_info&AgentUserId=${connectUserId}`;
     console.log('apiUrl: ', apiUrl)
     try {
+      setLoading(true);
+
+      const authResult = await acquireTokenWithRecovery({ ...apiRequest }, { allowInteraction: false });
+      if (!authResult?.accessToken) {
+        throw new Error("Failed to acquire a valid access token.");
+      }
+
       const response = await fetch(apiUrl, {
         method: "GET",
         headers: {
+          Authorization: `Bearer ${authResult.accessToken}`,
           "Content-Type": "application/json",
         },
       });
+
+      if (response.status === 401 || response.status === 403) {
+        setEmbeddedAuthStatus("signin-required");
+        setAuthError("Your session expired. Sign in again to continue.");
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(`API error: ${response.status} ${response.statusText}`);
@@ -133,7 +208,6 @@ function App() {
         setCanDeleteVM(data.canDeleteVM);
 
         console.log("User name identified:", data.userName);
-        //console.log("User region identified:", data.region);
         console.log("User tier identified:", data.tier);
         console.log("User VM delete status identified:", data.canDeleteVM);
 
@@ -147,11 +221,15 @@ function App() {
       setRegion("ALL");
       setUserName("Unknown user");
     }
-
-  }, [])
-
+    finally {
+      setLoading(false);
+    }
+  }, [acquireTokenWithRecovery])
 
   useEffect(() => {
+
+    // Never run app logic inside the MSAL popup window.
+    if (isMsalPopup) return;
 
     // 1. Standalone logic
     if (!isIframe && accounts.length > 0) {
@@ -204,13 +282,9 @@ function App() {
 
           setConnectUserId(connectUserId);
           setRegion(agentRegion);
-          setLoading(false);
 
           if (event.context.scope && "contactId" in event.context.scope) {
             setContactId(event.context.scope.contactId);
-          }
-          if (connectUserId) {
-            getUserInfo_Connect(connectUserId);
           }
         },
         onDestroy: async (event) => {
@@ -221,7 +295,44 @@ function App() {
       // Save the provider to state so you can use it globally in the app
       setConnectProvider(amazonConnectApp.provider);
     };
-  }, [accounts, instance, getUserInfo_Entra, getUserInfo_Connect, accounts.length]);
+  }, [accounts, instance, getUserInfo_Entra, accounts.length]);
+
+  /**
+   * 3. Embedded auth bootstrap: try silently once, then hand off to the
+   *    Sign in button if interaction is needed.
+   */
+  useEffect(() => {
+    if (!isIframe || isMsalInternalFrame || isMsalPopup) return;
+    if (silentAuthAttempted.current) return;
+    silentAuthAttempted.current = true;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const result = await acquireTokenWithRecovery({ ...apiRequest }, { allowInteraction: false });
+        if (cancelled) return;
+        setEmbeddedAuthStatus(result?.accessToken ? "authenticated" : "signin-required");
+      } catch (error) {
+        console.info("Silent sign in unavailable, interactive sign in required:", error);
+        if (!cancelled) setEmbeddedAuthStatus("signin-required");
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [acquireTokenWithRecovery]);
+
+  /**
+   * 4. Load the agent's profile only once both the SDK handshake and MSAL
+   *    sign in have completed.
+   */
+  useEffect(() => {
+    if (!isIframe || isMsalPopup) return;
+    if (embeddedAuthStatus !== "authenticated") return;
+    if (!connectUserId) return;
+
+    getUserInfo_Connect(connectUserId);
+  }, [embeddedAuthStatus, connectUserId, getUserInfo_Connect]);
 
 
   const makeOutboundCall = useCallback(async (phoneNumber: string, relatedContactid: string) => {
@@ -247,10 +358,31 @@ function App() {
     }
   }, [contactClient, voiceClient]);
 
+  // Render nothing inside the MSAL popup window.
+  if (isMsalPopup) {
+    return null;
+  }
+
   // If we are in an iframe but the SDK hasn't finished its handshake yet,
   // we show a neutral loading screen to prevent the MSAL Redirect from firing.
   if (isIframe && !sdkInitialized) {
     return <p>Connecting to Agent Workspace...</p>;
+  }
+
+  if (isIframe && embeddedAuthStatus === "checking") {
+    return <p>Signing you in...</p>;
+  }
+
+  if (isIframe && embeddedAuthStatus === "signin-required") {
+    return (
+      <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1.5, p: 3 }}>
+        <Typography variant="body1">Sign in to view voice messages.</Typography>
+        {authError && (
+          <Typography variant="body2" color="error">{authError}</Typography>
+        )}
+        <Button variant="contained" onClick={signInWithPopup}>Sign in</Button>
+      </Box>
+    );
   }
 
   // Main UI Fragment to keep code DRY

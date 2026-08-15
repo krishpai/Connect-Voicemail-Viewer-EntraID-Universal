@@ -1,10 +1,19 @@
 <!doctype html>
-<html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title></title>
+  </head>
+  <body>
+    <!--
+      MSAL popup redirect target.
 
-<head>
-  <title></title>
-</head>
+      This page exists only so the popup MSAL opens lands somewhere that does
+      NOT boot the React app. MSAL reads the auth response by polling this
+      window's URL from the opener, then closes it. Nothing else belongs here.
 
-<body></body>
-
+      Place at: public/blank.html  ->  served as /blank.html
+      Register in Entra as a Single-page application redirect URI.
+    -->
+  </body>
 </html>

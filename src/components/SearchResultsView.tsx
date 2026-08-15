@@ -192,6 +192,7 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<{ id: string, fileName: string } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [paginationModel, setPaginationModel] = useState({ pageSize: 15, page: 0 });
 
   const gridRows = useMemo<GridRow[]>(() => {
@@ -232,10 +233,14 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
       ? `${API_ENDPOINT_ENTRA_AUTH}?function_code=mark_voice_message_read&vmx3_file_name=${fileName}`
       : `${API_ENDPOINT_CONNECT_AUTH}?function_code=mark_voice_message_read&vmx3_file_name=${fileName}`;
     try {
-      let token = "None";
-      if (entraAuth) {
-        const authResult = await acquireTokenWithRecovery({ ...apiRequest });
-        if (authResult?.accessToken) token = authResult.accessToken;
+      // Fired by the audio element's onEnded, not by a click - there is no
+      // user gesture to open a popup with, so stay silent. Marking as read is
+      // best effort; the row is already shown as played in local state.
+      const authResult = await acquireTokenWithRecovery({ ...apiRequest }, { allowInteraction: false });
+      const token = authResult?.accessToken;
+      if (!token) {
+        console.warn("Skipping mark-as-read: no access token available.");
+        return;
       }
       await fetch(apiUrl, { headers: { Authorization: `Bearer ${token}` } });
     } catch (error) { console.error("Mark read error:", error); }
@@ -247,18 +252,34 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
     const apiUrl = entraAuth
       ? `${API_ENDPOINT_ENTRA_AUTH}?function_code=delete_voice_message&vmx3_file_name=${itemToDelete.fileName}`
       : `${API_ENDPOINT_CONNECT_AUTH}?function_code=delete_voice_message&vmx3_file_name=${itemToDelete.fileName}`;
+    setDeleteError(null);
     try {
-      let token = "None";
-      if (entraAuth) {
-        const authResult = await acquireTokenWithRecovery({ ...apiRequest });
-        if (authResult?.accessToken) token = authResult.accessToken;
+      // Runs from the Delete button, so the user gesture is still active and
+      // the hook may open a popup if the token needs refreshing.
+      const authResult = await acquireTokenWithRecovery({ ...apiRequest }, { allowInteraction: true });
+      const token = authResult?.accessToken;
+      if (!token) {
+        setDeleteError("Sign in did not complete. Try again.");
+        return;
       }
+
       const resp = await fetch(apiUrl, { headers: { Authorization: `Bearer ${token}` } });
+
+      if (resp.status === 401 || resp.status === 403) {
+        setDeleteError("Your session expired. Try again to sign in.");
+        return;
+      }
+
       if (resp.ok) {
         setDeletedFileNames(prev => new Set(prev).add(itemToDelete.fileName));
         setDeleteDialogOpen(false);
+      } else {
+        setDeleteError("The message could not be deleted. Try again.");
       }
-    } catch (e) { console.error("Delete error:", e); } finally { setIsDeleting(false); }
+    } catch (e) {
+      console.error("Delete error:", e);
+      setDeleteError("The message could not be deleted. Try again.");
+    } finally { setIsDeleting(false); }
   }, [itemToDelete, entraAuth, acquireTokenWithRecovery]);
 
   const columns = useMemo<GridColDef<GridRow>[]>(() => {
@@ -299,7 +320,7 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
       },
       {
         field: 'delete_action', filterable: false, sortable: false, headerName: '', width: 90, align: 'center', getApplyQuickFilterFn: () => null, renderCell: (params) => (canDeleteVM === 'Y') ? (
-          <IconButton onClick={() => { setItemToDelete({ id: params.row.id, fileName: params.row.fileName }); setDeleteDialogOpen(true); }}><DeleteIcon /></IconButton>
+          <IconButton onClick={() => { setItemToDelete({ id: params.row.id, fileName: params.row.fileName }); setDeleteError(null); setDeleteDialogOpen(true); }}><DeleteIcon /></IconButton>
         ) : null
       }
     ];
@@ -358,11 +379,16 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
         }}
       />
 
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+      <Dialog open={deleteDialogOpen} onClose={() => { setDeleteDialogOpen(false); setDeleteError(null); }}>
         <DialogTitle>Confirm Deletion</DialogTitle>
-        <DialogContent><DialogContentText>Permanently delete this voicemail?</DialogContentText></DialogContent>
+        <DialogContent>
+          <DialogContentText>Permanently delete this voicemail?</DialogContentText>
+          {deleteError && (
+            <DialogContentText sx={{ mt: 2, color: 'error.main' }}>{deleteError}</DialogContentText>
+          )}
+        </DialogContent>
         <DialogActions sx={{ pb: 2, px: 3 }}>
-          <Button onClick={() => setDeleteDialogOpen(false)} color="inherit">Cancel</Button>
+          <Button onClick={() => { setDeleteDialogOpen(false); setDeleteError(null); }} color="inherit">Cancel</Button>
           <Button color="error" variant="contained" disabled={isDeleting} onClick={confirmDelete}>
             {isDeleting ? <CircularProgress size={24} color="inherit" /> : "Delete"}
           </Button>
