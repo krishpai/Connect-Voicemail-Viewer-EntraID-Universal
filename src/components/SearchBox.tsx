@@ -28,6 +28,7 @@ export const SearchBox: React.FC<SearchBoxProps> = ({ userName, region, tier, en
   const [queryType, setQueryType] = useState<string>("New");
   const [loading, setLoading] = useState<boolean>(false);
 
+
   const acquireTokenWithRecovery = useAcquireTokenWithRecovery();
 
   /**
