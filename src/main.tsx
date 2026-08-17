@@ -23,7 +23,7 @@ LicenseInfo.setLicenseKey('e0d9bb8070ce0054c9d9ecb6e82cb58fTz0wLEU9MzI0NzIxNDQwM
 /*msalInstance --> fully configured authentication engine that knows how to log users in, store tokens, refresh tokens silently, and call APIs*/
 const msalInstance = new msal.PublicClientApplication(msalConfig);
 
-console.log("Before sync:", msalInstance.getActiveAccount());
+//console.log("Before sync:", msalInstance.getActiveAccount());
 
 const container = document.getElementById("root") as HTMLElement;
 const root = createRoot(container);
