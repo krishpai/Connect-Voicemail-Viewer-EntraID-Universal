@@ -13,14 +13,18 @@ export const msalConfig: Configuration = {
     authority: import.meta.env.VITE_APP_AUTHORITY,
     redirectUri: import.meta.env.VITE_REDIRECT_URI,
     postLogoutRedirectUri: import.meta.env.VITE_REDIRECT_URI,
+
   },
   cache: {
-    cacheLocation: "sessionStorage", // This configures where your cache will be stored
+    cacheLocation: "localStorage", // This configures where your cache will be stored
   },
   system: {
     allowRedirectInIframe: true,
     loggerOptions: {
-      logLevel: LogLevel.Error,
+      // Verbose while confirming the popup flow works on msal-browser@4.
+      // Turn back down to Error once confirmed - Verbose with
+      // piiLoggingEnabled logs token claims.
+      logLevel: LogLevel.Verbose,
       piiLoggingEnabled: true, // Only use this during local debugging!
       loggerCallback: (level, message, containsPii) => {
         if (containsPii) {
