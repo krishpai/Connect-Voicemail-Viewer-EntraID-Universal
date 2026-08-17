@@ -7,17 +7,15 @@ import { BrowserAuthError } from "@azure/msal-browser";
 import { useAcquireTokenWithRecovery } from "../hooks/useAcquireTokenWithRecovery";
 
 const API_ENDPOINT_ENTRA_AUTH = import.meta.env.VITE_API_URL_ENTRA_AUTH;
-const API_ENDPOINT_CONNECT_AUTH = import.meta.env.VITE_API_URL_CONNECT_AUTH;
 
 interface SearchBoxProps {
   userName: string;
   region: string;
   tier: string;
-  entraAuth: boolean;
   onSearchResultChange: (value: string) => void;
 }
 
-export const SearchBox: React.FC<SearchBoxProps> = ({ userName, region, tier, entraAuth, onSearchResultChange }) => {
+export const SearchBox: React.FC<SearchBoxProps> = ({ userName, region, tier, onSearchResultChange }) => {
 
   const [vmCategory, setVMCategory] = useState<string>("ALL");
   const [startDate, setStartDate] = useState<string>("");
@@ -55,7 +53,7 @@ export const SearchBox: React.FC<SearchBoxProps> = ({ userName, region, tier, en
     setSearchFailedServerOverloaded(false);
     setAuthFailed(null);
 
-    const endpoint = entraAuth ? API_ENDPOINT_ENTRA_AUTH : API_ENDPOINT_CONNECT_AUTH;
+    const endpoint = API_ENDPOINT_ENTRA_AUTH;
     const apiUrl = `${endpoint}?function_code=fetch_voice_messages&userName=${encodeURIComponent(userName)}&vmx3_region=${vmCategory}&user_tier=${tier}&start_date=${startDate}&end_date=${endDate}&query_type=${queryType}`;
 
     console.log("apiUrl: " + apiUrl);

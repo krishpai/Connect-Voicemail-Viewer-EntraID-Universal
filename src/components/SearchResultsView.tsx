@@ -35,13 +35,12 @@ import { useAcquireTokenWithRecovery } from "../hooks/useAcquireTokenWithRecover
 
 // --- API Endpoints ---
 const API_ENDPOINT_ENTRA_AUTH = import.meta.env.VITE_API_URL_ENTRA_AUTH;
-const API_ENDPOINT_CONNECT_AUTH = import.meta.env.VITE_API_URL_CONNECT_AUTH;
+//const API_ENDPOINT_CONNECT_AUTH = import.meta.env.VITE_API_URL_CONNECT_AUTH;
 const isIframe = window.self !== window.top;
 
 // --- Interfaces ---
 interface SearchResultsViewProps {
   searchResult: string | null;
-  entraAuth: boolean;
   canDeleteVM: string | null | undefined;
 
   onDialNumberClicked: (value: string, contactid: string) => void;
@@ -181,7 +180,7 @@ const NoRowsOverlay = () => (
 
 // --- Main Component ---
 
-export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResult, entraAuth, canDeleteVM, onDialNumberClicked }) => {
+export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResult, canDeleteVM, onDialNumberClicked }) => {
   const acquireTokenWithRecovery = useAcquireTokenWithRecovery();
   const playingAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -229,9 +228,7 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
 
   const handleMarkAsRead = useCallback(async (contactId: string, fileName: string) => {
     setReadMessages(prev => new Set(prev).add(contactId));
-    const apiUrl = entraAuth
-      ? `${API_ENDPOINT_ENTRA_AUTH}?function_code=mark_voice_message_read&vmx3_file_name=${fileName}`
-      : `${API_ENDPOINT_CONNECT_AUTH}?function_code=mark_voice_message_read&vmx3_file_name=${fileName}`;
+    const apiUrl = `${API_ENDPOINT_ENTRA_AUTH}?function_code=mark_voice_message_read&vmx3_file_name=${fileName}`;
     try {
       // Fired by the audio element's onEnded, not by a click - there is no
       // user gesture to open a popup with, so stay silent. Marking as read is
@@ -244,14 +241,12 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
       }
       await fetch(apiUrl, { headers: { Authorization: `Bearer ${token}` } });
     } catch (error) { console.error("Mark read error:", error); }
-  }, [entraAuth, acquireTokenWithRecovery]);
+  }, [acquireTokenWithRecovery]);
 
   const confirmDelete = useCallback(async () => {
     if (!itemToDelete) return;
     setIsDeleting(true);
-    const apiUrl = entraAuth
-      ? `${API_ENDPOINT_ENTRA_AUTH}?function_code=delete_voice_message&vmx3_file_name=${itemToDelete.fileName}`
-      : `${API_ENDPOINT_CONNECT_AUTH}?function_code=delete_voice_message&vmx3_file_name=${itemToDelete.fileName}`;
+    const apiUrl = `${API_ENDPOINT_ENTRA_AUTH}?function_code=delete_voice_message&vmx3_file_name=${itemToDelete.fileName}`;
     setDeleteError(null);
     try {
       // Runs from the Delete button, so the user gesture is still active and
@@ -280,7 +275,7 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
       console.error("Delete error:", e);
       setDeleteError("The message could not be deleted. Try again.");
     } finally { setIsDeleting(false); }
-  }, [itemToDelete, entraAuth, acquireTokenWithRecovery]);
+  }, [itemToDelete, acquireTokenWithRecovery]);
 
   const columns = useMemo<GridColDef<GridRow>[]>(() => {
     const baseColumns: GridColDef<GridRow>[] = [

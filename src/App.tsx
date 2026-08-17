@@ -18,7 +18,6 @@ import { useAcquireTokenWithRecovery } from "./hooks/useAcquireTokenWithRecovery
 import "./App.css";
 
 const API_ENDPOINT_ENTRA_AUTH = import.meta.env.VITE_API_URL_ENTRA_AUTH;
-const API_ENDPOINT_CONNECT_AUTH = import.meta.env.VITE_API_URL_CONNECT_AUTH;
 const API_SCOPE = import.meta.env.VITE_API_SCOPE;
 const isIframe = window.self !== window.top; // Immediate check
 
@@ -47,7 +46,7 @@ type EmbeddedAuthStatus = "checking" | "authenticated" | "signin-required";
 function App() {
   const { instance, accounts } = useMsal();
 
-  // SDK & Clients State
+  // SDK & Clients State (Agent Workspace embedding + calling - unrelated to auth)
   const [sdkInitialized, setSdkInitialized] = useState<boolean>(false);
   const [voiceClient, setVoiceClient] = useState<VoiceClient | null>(null);
   const [, setAgentClient] = useState<AgentClient | null>(null);
@@ -63,6 +62,8 @@ function App() {
 
   const [searchResult, setSearchResult] = useState("");
   const [loading, setLoading] = useState<boolean>(false);
+  // Kept as the "Agent Workspace SDK handshake fully resolved" readiness gate
+  // for the profile fetch below - its value is no longer sent to any API.
   const [connectUserId, setConnectUserId] = useState<string | null>(null);
   const [, setContactId] = useState<string | null>(null);
 
@@ -112,72 +113,33 @@ function App() {
   }, [acquireTokenWithRecovery]);
 
   /**
-   * Fetches the user region from the backend API for standalone app.
+   * Single Entra-authenticated lookup, used by both the standalone tab and
+   * the Agent Workspace embedded app. There is only one identity source now
+   * (the signed-in Entra account) and one backend endpoint - the Amazon
+   * Connect-specific lookup keyed by agent ARN has been retired.
+   *
+   * - applyRegion: standalone has no other region source, so the API
+   *   response is authoritative. Embedded already has a region from the
+   *   agent's routing profile (set during the Agent Workspace SDK handshake),
+   *   so callers there pass false to avoid overwriting it.
+   * - allowInteraction: standalone allows the recovery hook to fall back to
+   *   an interactive redirect. Embedded callers that run without a fresh
+   *   user gesture (the silent bootstrap, the post-handshake fetch) pass
+   *   false and let a failure surface as "signin-required" instead.
    */
-  const getUserInfo_Entra = useCallback(async (username: string) => {
+  const getUserInfo = useCallback(async (
+    username: string,
+    options: { applyRegion?: boolean; allowInteraction?: boolean } = {}
+  ) => {
+    const { applyRegion = true, allowInteraction = false } = options;
 
     const apiUrl = `${API_ENDPOINT_ENTRA_AUTH}?function_code=get_region_of_user&AgentUserName=${encodeURIComponent(username)}`;
 
     try {
       setLoading(true);
 
-      const authResult = await acquireTokenWithRecovery({ ...apiRequest });
+      const authResult = await acquireTokenWithRecovery({ ...apiRequest }, { allowInteraction });
 
-      // 2. Guard against missing tokens
-      if (!authResult?.accessToken) {
-        throw new Error("Failed to acquire a valid access token.");
-      }
-
-      const response = await fetch(apiUrl, {
-        method: "GET",
-        headers:
-        {
-          Authorization: `Bearer ${authResult.accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-
-      if (data?.success && data?.found) {
-        setRegion(data.region);
-        setTier(data.tier);
-        setCanDeleteVM('Y');
-
-
-        console.log("User region identified:", data.region);
-        console.log("User tier identified:", data.tier);
-        console.log("User VM delete status identified:", data.canDeleteVM);
-
-      }
-    }
-    catch (error) {
-      console.error("Failed to fetch user region:", error);
-    }
-    finally {
-      setLoading(false);
-    }
-    // Include all stable dependencies
-  }, [acquireTokenWithRecovery]);
-
-  /**
-   * Fetches the user info from the backend API for the iframe embedded app.
-   * Sends the MSAL access token as a bearer token. Silent only - this runs on
-   * mount, with no user gesture to open a popup with.
-   * Region comes from the routing profile, so it is not overwritten here.
-   */
-  const getUserInfo_Connect = useCallback(async (connectUserId: string | null) => {
-    console.log("*********** in getUserInfo_Connect");
-    const apiUrl = `${API_ENDPOINT_CONNECT_AUTH}?function_code=get_user_info&AgentUserId=${connectUserId}`;
-    console.log('apiUrl: ', apiUrl)
-    try {
-      setLoading(true);
-
-      const authResult = await acquireTokenWithRecovery({ ...apiRequest }, { allowInteraction: false });
       if (!authResult?.accessToken) {
         throw new Error("Failed to acquire a valid access token.");
       }
@@ -201,30 +163,26 @@ function App() {
       }
 
       const data = await response.json();
-      if (data?.success && data?.found) {
-        //setRegion(data.region);
-        setTier(data.tier);
-        setUserName(data.userName);
-        setCanDeleteVM(data.canDeleteVM);
 
-        console.log("User name identified:", data.userName);
+      if (data?.success && data?.found) {
+        if (applyRegion) setRegion(data.region);
+        setTier(data.tier);
+        setUserName(data.userName ?? username);
+        setCanDeleteVM(data.canDeleteVM ?? "Y");
+
+        console.log("User region identified:", data.region);
         console.log("User tier identified:", data.tier);
         console.log("User VM delete status identified:", data.canDeleteVM);
-
-      }
-      else {
-        throw new Error(`API error: ${response.status} ${response.statusText}`);
       }
     }
     catch (error) {
-      console.log('error: ', error)
-      setRegion("ALL");
-      setUserName("Unknown user");
+      console.error("Failed to fetch user info:", error);
+      setUserName((prev) => prev || username);
     }
     finally {
       setLoading(false);
     }
-  }, [acquireTokenWithRecovery])
+  }, [acquireTokenWithRecovery]);
 
   useEffect(() => {
 
@@ -241,12 +199,15 @@ function App() {
         console.warn("No preferred_username found in claims.");
         return;
       }
-      getUserInfo_Entra(username);
+      getUserInfo(username, { applyRegion: true, allowInteraction: true });
     }
 
     if (isMsalInternalFrame) return;
 
-    // 2. Iframe / Amazon Connect logic
+    // 2. Iframe / Amazon Connect logic - embedding and voice calling only.
+    // Identity/authorization is handled entirely by MSAL below; this SDK
+    // handshake is only used for hosting context (routing profile / region)
+    // and for the Connect clients that power call handling.
     if (isIframe && !sdkStarted.current) {
       console.info("In Iframe logic");
       sdkStarted.current = true;
@@ -295,7 +256,7 @@ function App() {
       // Save the provider to state so you can use it globally in the app
       setConnectProvider(amazonConnectApp.provider);
     };
-  }, [accounts, instance, getUserInfo_Entra, accounts.length]);
+  }, [accounts, instance, getUserInfo, accounts.length]);
 
   /**
    * 3. Embedded auth bootstrap: try silently once, then hand off to the
@@ -323,16 +284,27 @@ function App() {
   }, [acquireTokenWithRecovery]);
 
   /**
-   * 4. Load the agent's profile only once both the SDK handshake and MSAL
-   *    sign in have completed.
+   * 4. Load the agent's profile only once both the SDK handshake (region is
+   *    ready) and MSAL sign in have completed. Username comes from the same
+   *    Entra account that just signed in via popup - there is no longer a
+   *    separate Connect-side identity to look up.
    */
   useEffect(() => {
     if (!isIframe || isMsalPopup) return;
     if (embeddedAuthStatus !== "authenticated") return;
-    if (!connectUserId) return;
+    if (!connectUserId) return; // wait for the Agent Workspace handshake to finish
 
-    getUserInfo_Connect(connectUserId);
-  }, [embeddedAuthStatus, connectUserId, getUserInfo_Connect]);
+    const account = instance.getActiveAccount();
+    const username = account?.idTokenClaims?.preferred_username as string | undefined;
+
+    if (!username) {
+      console.warn("No preferred_username found on the active account.");
+      setUserName("Unknown user");
+      return;
+    }
+
+    getUserInfo(username, { applyRegion: false, allowInteraction: false });
+  }, [embeddedAuthStatus, connectUserId, instance, getUserInfo]);
 
 
   const makeOutboundCall = useCallback(async (phoneNumber: string, relatedContactid: string) => {
@@ -392,9 +364,9 @@ function App() {
         <p>Loading preferences...</p>
       ) : (
         <>
-          <SearchBox userName={userName ?? "User"} region={region} tier={tier} entraAuth={!isIframe} onSearchResultChange={setSearchResult} />
+          <SearchBox userName={userName ?? "User"} region={region} tier={tier} onSearchResultChange={setSearchResult} />
           <Divider sx={{ my: 0.5, border: "1px solid", borderColor: "primary.dark" }} />
-          {searchResult && (<SearchResultsView searchResult={searchResult} entraAuth={!isIframe} canDeleteVM={canDeleteVM} onDialNumberClicked={makeOutboundCall} />)}
+          {searchResult && (<SearchResultsView searchResult={searchResult} canDeleteVM={canDeleteVM} onDialNumberClicked={makeOutboundCall} />)}
         </>
       )}
     </PageLayout>
