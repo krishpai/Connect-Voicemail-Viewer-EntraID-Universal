@@ -39,7 +39,6 @@ const root = createRoot(container);
  */
 msalInstance.initialize().then(() => {
   console.log("After init:", msalInstance.getActiveAccount());
-
   root.render(
     <React.StrictMode>
       <MsalProvider instance={msalInstance}>
