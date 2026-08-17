@@ -27,14 +27,27 @@ console.log("Before sync:", msalInstance.getActiveAccount());
 
 const container = document.getElementById("root") as HTMLElement;
 const root = createRoot(container);
+/**
+ * initialize() must be called and awaited before ANY other MSAL API on this
+ * instance - including getActiveAccount() / getAllAccounts(). Calling one of
+ * those first throws uninitialized_public_client_application. This only bites
+ * once there's a cached account to iterate (i.e. after a successful sign-in
+ * has persisted one to localStorage) - with an empty cache the internal
+ * account loop never runs, so the throwing code path is never reached. That
+ * is why this was silent on every earlier test and only appeared on reload,
+ * once a real session existed.
+ */
+msalInstance.initialize().then(() => {
+  console.log("After init:", msalInstance.getActiveAccount());
 
-root.render(
-  <React.StrictMode>
-    <MsalProvider instance={msalInstance}>
-      <App />
-    </MsalProvider>
-  </React.StrictMode>,
-);
+  root.render(
+    <React.StrictMode>
+      <MsalProvider instance={msalInstance}>
+        <App />
+      </MsalProvider>
+    </React.StrictMode>,
+  );
+});
 
 /**
  * All components underneath MsalProvider will have access to the PublicClientApplication instance
