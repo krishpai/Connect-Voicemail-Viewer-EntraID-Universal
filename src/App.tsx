@@ -32,8 +32,7 @@ const isMsalInternalFrame = window.location.hash.includes("code=") ||
  * boot its normal logic there - the popup exists only so MSAL can read the
  * auth response, and it closes itself moments later.
  */
-const isMsalPopup =
-  !!window.opener && window.opener !== window && window.name.startsWith("msal.");
+const isMsalPopup = !!window.opener && window.opener !== window && window.name.startsWith("msal.");
 
 /**
  * Auth states for the embedded (Agent Workspace) path.
@@ -62,14 +61,14 @@ function App() {
 
   const [searchResult, setSearchResult] = useState("");
   const [loading, setLoading] = useState<boolean>(false);
+
   // Kept as the "Agent Workspace SDK handshake fully resolved" readiness gate
   // for the profile fetch below - its value is no longer sent to any API.
   const [connectUserId, setConnectUserId] = useState<string | null>(null);
   const [, setContactId] = useState<string | null>(null);
 
   // Embedded (iframe) MSAL state
-  const [embeddedAuthStatus, setEmbeddedAuthStatus] =
-    useState<EmbeddedAuthStatus>("checking");
+  const [embeddedAuthStatus, setEmbeddedAuthStatus] = useState<EmbeddedAuthStatus>("checking");
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Refs to prevent double-init or stale closures

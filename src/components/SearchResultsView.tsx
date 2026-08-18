@@ -314,7 +314,7 @@ export const SearchResultsView: React.FC<SearchResultsViewProps> = ({ searchResu
         )
       },
       {
-        field: 'delete_action', filterable: false, sortable: false, headerName: '', width: 90, align: 'center', getApplyQuickFilterFn: () => null, renderCell: (params) => (canDeleteVM === 'Y') ? (
+        field: 'delete_action', filterable: false, sortable: false, headerName: '', width: 90, align: 'center', getApplyQuickFilterFn: () => null, renderCell: (params) => (params.row.vmx3_queue_name === 'Self' || canDeleteVM === 'Y') ? (
           <IconButton onClick={() => { setItemToDelete({ id: params.row.id, fileName: params.row.fileName }); setDeleteError(null); setDeleteDialogOpen(true); }}><DeleteIcon /></IconButton>
         ) : null
       }

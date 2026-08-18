@@ -20,22 +20,19 @@ LicenseInfo.setLicenseKey('e0d9bb8070ce0054c9d9ecb6e82cb58fTz0wLEU9MzI0NzIxNDQwM
  * like AuthenticatedTemplate / UnauthenticatedTemplate all work automatically underneath it.
  */
 
-/*msalInstance --> fully configured authentication engine that knows how to log users in, store tokens, refresh tokens silently, and call APIs*/
+/*
+* msalInstance --> fully configured authentication engine that knows how to log users in, store tokens, 
+* refresh tokens silently, and call APIs
+*/
 const msalInstance = new msal.PublicClientApplication(msalConfig);
-
-//console.log("Before sync:", msalInstance.getActiveAccount());
-
 const container = document.getElementById("root") as HTMLElement;
 const root = createRoot(container);
 /**
- * initialize() must be called and awaited before ANY other MSAL API on this
- * instance - including getActiveAccount() / getAllAccounts(). Calling one of
- * those first throws uninitialized_public_client_application. This only bites
- * once there's a cached account to iterate (i.e. after a successful sign-in
- * has persisted one to localStorage) - with an empty cache the internal
- * account loop never runs, so the throwing code path is never reached. That
- * is why this was silent on every earlier test and only appeared on reload,
- * once a real session existed.
+ * initialize() must be called and awaited before ANY other MSAL API on this instance - 
+ * including getActiveAccount() / getAllAccounts(). Calling one of those first throws uninitialized_public_client_application. 
+ * This only bites once there's a cached account to iterate (i.e. after a successful sign-in has persisted one to localStorage) 
+ * - with an empty cache the internal account loop never runs, so the throwing code path is never reached. 
+ * That is why this was silent on every earlier test and only appeared on reload, once a real session existed.
  */
 msalInstance.initialize().then(() => {
   console.log("After init:", msalInstance.getActiveAccount());
